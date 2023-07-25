@@ -27,7 +27,7 @@ def get_arguments():
     parser.add_argument('--lr', type=float, default=1e-3) 
     parser.add_argument('--train_epoch', type=int, default=1000)
     parser.add_argument('--log_epoch', type=int, default=200)
-    parser.add_argument('--ref_idx', type=str, default='00')
+    parser.add_argument('--ref_idx', type=str, default='000')
     
     args = parser.parse_args()
     return args
@@ -38,16 +38,17 @@ def main():
     args = get_arguments()
     print("Args:", args)
 
-    images_path = args.data + '/Images/'
-    masks_path = args.data + '/Annotations/'
+    images_path = args.data + '/TestImages/'
+    masks_path = args.data + '/TestAnnotations/'
     output_path = './outputs/' + args.outdir
 
     if not os.path.exists('./outputs/'):
         os.mkdir('./outputs/')
     
     for obj_name in os.listdir(images_path):
-        if ".DS" not in obj_name:
-            persam_f(args, obj_name, images_path, masks_path, output_path)
+        if ".DS" not in obj_name:   
+            if obj_name == 'cake':
+                persam_f(args, obj_name, images_path, masks_path, output_path)
 
 
 def persam_f(args, obj_name, images_path, masks_path, output_path):
@@ -159,7 +160,7 @@ def persam_f(args, obj_name, images_path, masks_path, output_path):
     for test_idx in tqdm(range(len(os.listdir(test_images_path)))):
 
         # Load test image
-        test_idx = '%02d' % test_idx
+        test_idx = '%03d' % test_idx
         test_image_path = test_images_path + '/' + test_idx + '.jpg'
         test_image = cv2.imread(test_image_path)
         test_image = cv2.cvtColor(test_image, cv2.COLOR_BGR2RGB)

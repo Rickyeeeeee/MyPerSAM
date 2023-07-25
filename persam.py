@@ -23,7 +23,7 @@ def get_arguments():
     parser.add_argument('--outdir', type=str, default='persam')
     parser.add_argument('--ckpt', type=str, default='./sam_vit_h_4b8939.pth')
 
-    parser.add_argument('--ref_idx', type=str, default='00')
+    parser.add_argument('--ref_idx', type=str, default='000')
     
     args = parser.parse_args()
     return args
@@ -34,8 +34,8 @@ def main():
     args = get_arguments()
     print("Args:", args)
 
-    images_path = args.data + '/Images/'
-    masks_path = args.data + '/Annotations/'
+    images_path = args.data + '/TestImages/'
+    masks_path = args.data + '/TestAnnotations/'
     output_path = './outputs/' + args.outdir
 
     if not os.path.exists('./outputs/'):
@@ -43,7 +43,8 @@ def main():
     
     for obj_name in os.listdir(images_path):
         if ".DS" not in obj_name:
-            persam(args, obj_name, images_path, masks_path, output_path)
+            if obj_name == 'pizza2':
+                persam(args, obj_name, images_path, masks_path, output_path)
 
 
 def persam(args, obj_name, images_path, masks_path, output_path):
@@ -54,6 +55,8 @@ def persam(args, obj_name, images_path, masks_path, output_path):
     ref_image_path = os.path.join(images_path, obj_name, args.ref_idx + '.jpg')
     ref_mask_path = os.path.join(masks_path, obj_name, args.ref_idx + '.png')
     test_images_path = os.path.join(images_path, obj_name)
+    print(ref_image_path)
+    print(ref_mask_path)
 
     output_path = os.path.join(output_path, obj_name)
     os.makedirs(output_path, exist_ok=True)
@@ -88,10 +91,10 @@ def persam(args, obj_name, images_path, masks_path, output_path):
 
 
     print('======> Start Testing')
-    for test_idx in tqdm(range(len(os.listdir(test_images_path)))):
+    for test_idx in tqdm(range(min(len(os.listdir(test_images_path)), 100))):
     
         # Load test image
-        test_idx = '%02d' % test_idx
+        test_idx = '%03d' % test_idx
         test_image_path = test_images_path + '/' + test_idx + '.jpg'
         test_image = cv2.imread(test_image_path)
         test_image = cv2.cvtColor(test_image, cv2.COLOR_BGR2RGB)
