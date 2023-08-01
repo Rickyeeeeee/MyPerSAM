@@ -38,3 +38,6 @@ _darcs
 data
 work_dirs
 
+data/
+outputs/
+utils/
