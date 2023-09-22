@@ -36,14 +36,14 @@ def main():
 
     images_path = args.data + '/TestImages/'
     masks_path = args.data + '/TestAnnotations/'
-    output_path = './outputs/' + args.outdir
+    output_path = './outputs/custom/' + args.outdir
 
     if not os.path.exists('./outputs/'):
         os.mkdir('./outputs/')
     
     for obj_name in os.listdir(images_path):
         if ".DS" not in obj_name:
-            if obj_name == 'pizza2':
+            if obj_name == 'pizza':
                 persam(args, obj_name, images_path, masks_path, output_path)
 
 
@@ -142,6 +142,15 @@ def persam(args, obj_name, images_path, masks_path, output_path):
         )
         best_idx = 0
 
+        plt.figure(figsize=(10, 10))
+        plt.imshow(test_image)
+        show_mask(masks[best_idx], plt.gca())
+        show_points(topk_xy, topk_label, plt.gca())
+        plt.title(f"Mask {best_idx}", fontsize=18)
+        plt.axis('off')
+        vis_mask_output_path = os.path.join(output_path, f'vis_mask_{test_idx}.jpg')
+        with open(vis_mask_output_path, 'wb') as outfile:
+            plt.savefig(outfile, format='jpg')
         # Cascaded Post-refinement-1
         masks, scores, logits, _ = predictor.predict(
                     point_coords=topk_xy,
@@ -149,6 +158,18 @@ def persam(args, obj_name, images_path, masks_path, output_path):
                     mask_input=logits[best_idx: best_idx + 1, :, :], 
                     multimask_output=True)
         best_idx = np.argmax(scores)
+
+        for idx in range(3):
+            plt.figure(figsize=(10, 10))
+            plt.imshow(test_image)
+            show_mask(masks[idx], plt.gca())
+            show_points(topk_xy, topk_label, plt.gca())
+            # show_box(input_box, plt.gca())
+            plt.title(f"Mask {idx}, score:{scores[idx]}", fontsize=18)
+            plt.axis('off')
+            vis_mask_output_path = os.path.join(output_path, f'vis_mask_{test_idx}_{idx}.jpg')
+            with open(vis_mask_output_path, 'wb') as outfile:
+                plt.savefig(outfile, format='jpg')
 
         # Cascaded Post-refinement-2
         y, x = np.nonzero(masks[best_idx])
@@ -164,7 +185,6 @@ def persam(args, obj_name, images_path, masks_path, output_path):
             mask_input=logits[best_idx: best_idx + 1, :, :], 
             multimask_output=True)
         best_idx = np.argmax(scores)
-
         # Save masks
         plt.figure(figsize=(10, 10))
         plt.imshow(test_image)
@@ -195,7 +215,7 @@ def point_selection(mask_sim, topk=1):
         
     # Top-last point selection
     last_xy = mask_sim.flatten(0).topk(topk, largest=False)[1]
-    last_x = (last_xy // h).unsqueeze(0)
+    last_x = (last_xy // h).unsqueeze(0 )
     last_y = (last_xy - last_x * h)
     last_xy = torch.cat((last_y, last_x), dim=0).permute(1, 0)
     last_label = np.array([0] * topk)

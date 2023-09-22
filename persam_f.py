@@ -26,7 +26,7 @@ def get_arguments():
     parser.add_argument('--sam_type', type=str, default='vit_h')
 
     parser.add_argument('--lr', type=float, default=1e-3) 
-    parser.add_argument('--train_epoch', type=int, default=2000)
+    parser.add_argument('--train_epoch', type=int, default=0)
     parser.add_argument('--log_epoch', type=int, default=200)
     parser.add_argument('--ref_idx', type=str, default='000')
     
@@ -41,14 +41,14 @@ def main():
 
     images_path = args.data + '/TestImages/'
     masks_path = args.data + '/TestAnnotations/'
-    output_path = './outputs/' + args.outdir
+    output_path = './outputs/custom/' + args.outdir
 
     if not os.path.exists('./outputs/'):
         os.mkdir('./outputs/')
     
     for obj_name in os.listdir(images_path):
         if ".DS" not in obj_name:   
-            if obj_name == 'chicken':
+            if obj_name == 'banana':
                 persam_f(args, obj_name, images_path, masks_path, output_path)
 
 
@@ -58,7 +58,9 @@ def persam_f(args, obj_name, images_path, masks_path, output_path):
     
     # Path preparation
     ref_image_path = os.path.join(images_path, obj_name, args.ref_idx + '.jpg')
+    ref_image_path2 = os.path.join(images_path, obj_name, '071' + '.jpg')
     ref_mask_path = os.path.join(masks_path, obj_name, args.ref_idx + '.png')
+    ref_mask_path2 = os.path.join(masks_path, obj_name, '071' + '.png')
     test_images_path = os.path.join(images_path, obj_name)
 
     output_path = os.path.join(output_path, obj_name)
@@ -71,8 +73,18 @@ def persam_f(args, obj_name, images_path, masks_path, output_path):
     ref_mask = cv2.imread(ref_mask_path)
     ref_mask = cv2.cvtColor(ref_mask, cv2.COLOR_BGR2RGB)
 
+    ref_image2 = cv2.imread(ref_image_path)
+    ref_image2 = cv2.cvtColor(ref_image2, cv2.COLOR_BGR2RGB)
+
+    ref_mask2 = cv2.imread(ref_mask_path)
+    ref_mask2 = cv2.cvtColor(ref_mask2, cv2.COLOR_BGR2RGB)
+
+
     gt_mask = torch.tensor(ref_mask)[:, :, 0] > 0 
     gt_mask = gt_mask.float().unsqueeze(0).flatten(1).cuda()
+
+    gt_mask2 = torch.tensor(ref_mask2)[:, :, 0] > 0 
+    gt_mask2 = gt_mask2.float().unsqueeze(0).flatten(1).cuda()
 
     
     print("======> Load SAM" )
@@ -105,6 +117,13 @@ def persam_f(args, obj_name, images_path, masks_path, output_path):
     target_feat_max = torch.max(target_feat, dim=0)[0]
     target_feat = (target_feat_max / 2 + target_feat_mean / 2).unsqueeze(0)
 
+    # * Ricky:
+    # Target feature extraction
+    target_feat2 = ref_feat[ref_mask > 0]
+    target_embedding = target_feat2.mean(0).unsqueeze(0)
+    target_feat2 = target_embedding / target_embedding.norm(dim=-1, keepdim=True)
+    target_embedding = target_embedding.unsqueeze(0)
+
     # Cosine similarity
     h, w, C = ref_feat.shape
     target_feat = target_feat / target_feat.norm(dim=-1, keepdim=True)
@@ -120,8 +139,12 @@ def persam_f(args, obj_name, images_path, masks_path, output_path):
                     original_size=predictor.original_size).squeeze()
 
     # Positive location prior
-    topk_xy, topk_label = point_selection(sim, topk=1)
+    topk_xy, topk_label, _, _, _, _, _, _ = point_selection(sim, topk=1)
 
+     # Obtain the target guidance for cross-attention layers
+    sim = (sim - sim.mean()) / torch.std(sim)
+    sim = F.interpolate(sim.unsqueeze(0).unsqueeze(0), size=(64, 64), mode="bilinear")
+    attn_sim = sim.sigmoid_().unsqueeze(0).flatten(3)
 
     print('======> Start Training')
     # Learnable mask weights
@@ -164,7 +187,7 @@ def persam_f(args, obj_name, images_path, masks_path, output_path):
     weights = torch.cat((1 - mask_weights.weights.sum(0).unsqueeze(0), mask_weights.weights), dim=0)
     weights_np = weights.detach().cpu().numpy()
     print('======> Mask weights:\n', weights_np)
-
+    output_vis = False
     print('======> Start Testing')
     for test_idx in tqdm(range(len(os.listdir(test_images_path)))):
 
@@ -191,15 +214,35 @@ def persam_f(args, obj_name, images_path, masks_path, output_path):
                         input_size=predictor.input_size,
                         original_size=predictor.original_size).squeeze()
 
+        # * Ricky:
         # Positive location prior
-        topk_xy, topk_label = point_selection(sim, topk=1)
+        topk_xy_i, topk_label_i, last_xy_i, last_label_i, p2_xy, p2_label, p2_xy2, p2_label2 = point_selection(sim, topk=1)
+        topk_xy = np.concatenate([topk_xy_i, last_xy_i, p2_xy, p2_xy2], axis=0)
+        topk_label = np.concatenate([topk_label_i, last_label_i, p2_label, p2_label2], axis=0)
+
+        sim = (sim - sim.mean()) / torch.std(sim)
+        sim = F.interpolate(sim.unsqueeze(0).unsqueeze(0), size=(64, 64), mode="bilinear")
+        attn_sim = sim.sigmoid_().unsqueeze(0).flatten(3)
 
         # First-step prediction
         masks, scores, logits, logits_high = predictor.predict(
                     point_coords=topk_xy,
                     point_labels=topk_label,
                     multimask_output=True)
-
+        
+        if (output_vis):
+            for idx in range(3):
+                plt.figure(figsize=(10, 10))
+                plt.imshow(test_image)
+                show_mask(masks[idx], plt.gca())
+                show_points(topk_xy, topk_label, plt.gca())
+                # show_box(input_box, plt.gca())
+                plt.title(f"Mask {idx}, score:{scores[idx]}", fontsize=18)
+                plt.axis('off')
+                vis_mask_output_path = os.path.join(output_path, f'vis_mask_{test_idx}_{idx}.jpg')
+                with open(vis_mask_output_path, 'wb') as outfile:
+                    plt.savefig(outfile, format='jpg')
+        # break
         # Weighted sum three-scale masks
         logits_high = logits_high * weights.unsqueeze(-1)
         logit_high = logits_high.sum(0)
@@ -209,6 +252,7 @@ def persam_f(args, obj_name, images_path, masks_path, output_path):
         logit = logits.sum(0)
 
         # Cascaded Post-refinement-1
+        mask = masks[np.argmax(scores)]
         y, x = np.nonzero(mask)
         x_min = x.min()
         x_max = x.max()
@@ -221,6 +265,18 @@ def persam_f(args, obj_name, images_path, masks_path, output_path):
             box=input_box[None, :],
             mask_input=logit[None, :, :],
             multimask_output=True)
+        if (output_vis):
+            for idx in range(3):
+                plt.figure(figsize=(10, 10))
+                plt.imshow(test_image)
+                show_mask(masks[idx], plt.gca())
+                show_points(topk_xy, topk_label, plt.gca())
+                show_box(input_box, plt.gca())
+                plt.title(f"Mask {idx}, score:{scores[idx]}", fontsize=18)
+                plt.axis('off')
+                vis_mask_output_path = os.path.join(output_path, f'vis_mask_{test_idx}_{idx}.jpg')
+                with open(vis_mask_output_path, 'wb') as outfile:
+                    plt.savefig(outfile, format='jpg')
         best_idx = np.argmax(scores)
 
         # Cascaded Post-refinement-2
@@ -237,6 +293,18 @@ def persam_f(args, obj_name, images_path, masks_path, output_path):
             mask_input=logits[best_idx: best_idx + 1, :, :],
             multimask_output=True)
         best_idx = np.argmax(scores)
+        if (output_vis):
+            for idx in range(3):
+                plt.figure(figsize=(10, 10))
+                plt.imshow(test_image)
+                show_mask(masks[idx], plt.gca())
+                show_points(topk_xy, topk_label, plt.gca())
+                show_box(input_box, plt.gca())
+                plt.title(f"Mask {idx}, score:{scores[idx]}", fontsize=18)
+                plt.axis('off')
+                vis_mask_output_path = os.path.join(output_path, f'vis_mask_{test_idx}_{idx}.jpg')
+                with open(vis_mask_output_path, 'wb') as outfile:
+                    plt.savefig(outfile, format='jpg')
         
         # Save masks
         plt.figure(figsize=(10, 10))
@@ -249,11 +317,14 @@ def persam_f(args, obj_name, images_path, masks_path, output_path):
         with open(vis_mask_output_path, 'wb') as outfile:
             plt.savefig(outfile, format='jpg')
 
+
         final_mask = masks[best_idx]
         mask_colors = np.zeros((final_mask.shape[0], final_mask.shape[1], 3), dtype=np.uint8)
         mask_colors[final_mask, :] = np.array([[0, 0, 128]])
         mask_output_path = os.path.join(output_path, test_idx + '.png')
         cv2.imwrite(mask_output_path, mask_colors)
+
+        # break
 
 
 class Mask_Weights(nn.Module):
@@ -262,7 +333,7 @@ class Mask_Weights(nn.Module):
         self.weights = nn.Parameter(torch.ones(2, 1, requires_grad=True) / 3)
 
 
-def point_selection(mask_sim, topk=1):
+def point_selection(mask_sim, topk=1, threshold=0.005):
     # Top-1 point selection
     w, h = mask_sim.shape
     topk_xy = mask_sim.flatten(0).topk(topk)[1]
@@ -271,8 +342,34 @@ def point_selection(mask_sim, topk=1):
     topk_xy = torch.cat((topk_y, topk_x), dim=0).permute(1, 0)
     topk_label = np.array([1] * topk)
     topk_xy = topk_xy.cpu().numpy()
+
     
-    return topk_xy, topk_label
+    threshold = int(w * h * threshold)
+    topn_xy = mask_sim.flatten(0).topk(threshold)[1]
+    random_idx = np.random.choice(range(threshold // 2, threshold), size=1)
+    random_x = (topn_xy[random_idx] // h).unsqueeze(0)
+    random_y = (topn_xy[random_idx] - random_x * h)
+    random_xy = torch.cat((random_y, random_x), dim=0).permute(1, 0)
+    random_label = np.array([1])    
+    random_xy = random_xy.cpu().numpy()
+        
+    # Top-last point selection
+    last_xy = mask_sim.flatten(0).topk(topk, largest=False)[1]
+    last_x = (last_xy // h).unsqueeze(0 )
+    last_y = (last_xy - last_x * h)
+    last_xy = torch.cat((last_y, last_x), dim=0).permute(1, 0)
+    last_label = np.array([0] * topk)
+    last_xy = last_xy.cpu().numpy()
+    
+    topn_xy = mask_sim.flatten(0).topk(threshold, largest=False)[1]
+    random_idx = np.random.choice(range(threshold // 2, threshold), size=1)
+    random_x = (topn_xy[random_idx] // h).unsqueeze(0)
+    random_y = (topn_xy[random_idx] - random_x * h)
+    random_xy2 = torch.cat((random_y, random_x), dim=0).permute(1, 0)
+    random_label2 = np.array([0])    
+    random_xy2 = random_xy2.cpu().numpy()
+
+    return topk_xy, topk_label, last_xy, last_label, random_xy, random_label, random_xy2, random_label2
 
 
 def calculate_dice_loss(inputs, targets, num_masks = 1):
